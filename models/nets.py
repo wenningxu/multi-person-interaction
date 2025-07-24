@@ -1,7 +1,7 @@
 import torch
 
 from models.utils import *
-from models.cfg_sampler import ClassifierFreeSampleModel
+from models.cfg_sampler import ClassifierFreeSampleModel, CFGSingleModel
 from models.blocks import *
 from utils.utils import *
 
@@ -145,6 +145,40 @@ class InterDenoiser(nn.Module):
 
         return output
 
+    def single_forward(self, x, timesteps, mask=None, cond=None, b=None):
+        """
+        x: B, T, D
+        """
+        B, T = x.shape[0], x.shape[1]
+        x_a = x
+        x_b = b
+
+        if mask is not None:
+            mask = mask[...,0]
+
+        emb = self.embed_timestep(timesteps) + self.text_embed(cond)
+
+        a_emb = self.motion_embed(x_a)
+        b_emb = self.motion_embed(x_b)
+        h_a_prev = self.sequence_pos_encoder(a_emb)
+        h_b_prev = self.sequence_pos_encoder(b_emb)
+
+        if mask is None:
+            mask = torch.ones(B, T).to(x_a.device)
+        key_padding_mask = ~(mask > 0.5)
+
+        for i,block in enumerate(self.blocks):
+            h_a = block(h_a_prev, h_b_prev, emb, key_padding_mask)
+            h_b = block(h_b_prev, h_a_prev, emb, key_padding_mask)
+            h_a_prev = h_a
+            h_b_prev = h_b
+
+        output_a = self.out(h_a)
+
+        output = output_a
+
+        return output
+
 
 
 class InterDiffusion(nn.Module):
@@ -249,7 +283,7 @@ class InterDiffusion(nn.Module):
         )
 
         self.cfg_model = ClassifierFreeSampleModel(self.net, self.cfg_weight)
-        output = self.diffusion_test.ddim_sample_loop(
+        output = self.diffusion_test.ddim_sample_control_loop(
             self.cfg_model,
             (B, T, self.nfeats*2),
             clip_denoised=False,
@@ -259,6 +293,38 @@ class InterDiffusion(nn.Module):
                 "cond":cond,
             },
             x_start=None)
+        return {"output":output}
+
+    def forward_single(self, batch):
+        cond = batch["cond"]
+        # x_start = batch["motions"]
+        B = 1
+        T = batch["motion_lens"][0]
+        inter_graph = batch["inter_graph"]
+
+        timestep_respacing= [self.diffusion_steps]
+        self.diffusion_test = MotionDiffusion(
+            use_timesteps=space_timesteps(self.diffusion_steps, timestep_respacing),
+            betas=self.betas,
+            motion_rep=self.motion_rep,
+            model_mean_type=ModelMeanType.START_X,
+            model_var_type=ModelVarType.FIXED_SMALL,
+            loss_type=LossType.MSE,
+            rescale_timesteps = False,
+        )
+
+        self.cfg_model = CFGSingleModel(self.net, self.cfg_weight)
+        output = self.diffusion_test.p_sample_loop_multi(
+            self.cfg_model,
+            (B, T, self.nfeats),
+            clip_denoised=False,
+            progress=True,
+            model_kwargs={
+                "mask":None,
+                "cond":cond,
+                "b": None
+            },
+            inter_graph=inter_graph)
         return {"output":output}
 
 

@@ -49,6 +49,9 @@ class LitGenModel(L.LightningModule):
 
         plot_3d_motion(result_path, paramUtil.t2m_kinematic_chain, mp_joint, title=caption, fps=30)
 
+    def plot_multi(self, data, path, caption):
+        plot_3d_motion_multi(path, paramUtil.t2m_kinematic_chain, data, title=caption, fps=30, radius=4)
+
 
     def generate_one_sample(self, prompt, name):
         self.model.eval()
@@ -64,6 +67,27 @@ class LitGenModel(L.LightningModule):
             os.makedirs("results")
 
         self.plot_t2m([motion_output[0], motion_output[1]],
+                      result_path,
+                      batch["prompt"])
+
+    def generate_multi_sample(self, prompt, name, inter_graph, window_size = 300):
+        self.model.eval()
+        batch = OrderedDict({})
+        num_p = len(inter_graph['in'])
+        batch["motion_lens"] = torch.zeros(1,1).long().cuda()
+        batch["prompt"] = prompt
+
+        motion_output = self.generate_loop_single(batch, window_size, inter_graph)
+        joints3d = motion_output[..., :22 * 3].reshape(motion_output.shape[0], -1, 22, 3)
+        joints3d = filters.gaussian_filter1d(joints3d, 1, axis=1, mode='nearest')
+
+        if not os.path.exists("results"):
+            os.makedirs("results")
+        result_path = f"results/{name}.mp4"
+        save_path = f'results/{name}_{num_p}p.npy'
+        np.save(save_path, joints3d)
+
+        self.plot_multi(joints3d,
                       result_path,
                       batch["prompt"])
 
@@ -92,6 +116,23 @@ class LitGenModel(L.LightningModule):
         sequences[1] = np.concatenate(sequences[1], axis=0)
         return sequences
 
+    def generate_loop_single(self, batch, window_size, intergraph):
+        prompt = batch["prompt"]
+        batch = copy.deepcopy(batch)
+        batch["motion_lens"][:] = window_size
+        batch['inter_graph'] = intergraph
+        batch["text"] = [prompt]
+        batch = self.model.forward_test_single(batch)
+        motion_output = batch["output"]
+        outs = []
+        for output in motion_output:
+            out = self.normalizer.backward(output.cpu().detach().numpy())
+            outs.append(out)
+
+        sequences = np.concatenate(outs, axis=0)
+        return sequences
+
+
 def build_models(cfg):
     if cfg.NAME == "InterGen":
         model = InterGen(cfg)
@@ -107,7 +148,7 @@ if __name__ == '__main__':
     model = build_models(model_cfg)
 
     if model_cfg.CHECKPOINT:
-        ckpt = torch.load(model_cfg.CHECKPOINT, map_location="cpu")
+        ckpt = torch.load(model_cfg.CHECKPOINT, map_location="cpu", weights_only=False)
         for k in list(ckpt["state_dict"].keys()):
             if "model" in k:
                 ckpt["state_dict"][k.replace("model.", "")] = ckpt["state_dict"].pop(k)
@@ -116,6 +157,9 @@ if __name__ == '__main__':
 
     litmodel = LitGenModel(model, infer_cfg).to(torch.device("cuda:0"))
 
+    inter_graph_in = infer_cfg.INTER_GRAPH.IN
+    inter_graph_out = infer_cfg.INTER_GRAPH.OUT
+    inter_graph = {'in': inter_graph_in, 'out': inter_graph_out}
 
     with open(".\prompts.txt") as f:
         texts = f.readlines()
@@ -123,6 +167,5 @@ if __name__ == '__main__':
 
     for text in texts:
         name = text[:48]
-        for i in range(3):
-            litmodel.generate_one_sample(text, name+"_"+str(i))
+        litmodel.generate_multi_sample(text, name, inter_graph=inter_graph, window_size=300)
 

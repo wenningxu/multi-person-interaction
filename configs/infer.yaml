@@ -17,3 +17,7 @@ TRAIN:
   MODE: finetune
   LAST_EPOCH: 0
   LAST_ITER: 0
+
+INTER_GRAPH:
+  IN: [[1], [0], [0]]
+  OUT: [[1, 2], [0], []]

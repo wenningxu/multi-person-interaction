@@ -53,6 +53,11 @@ class InterGen(nn.Module):
         batch.update(self.decode_motion(batch))
         return batch
 
+    def forward_test_single(self, batch):
+        batch = self.text_process(batch)
+        batch.update(self.decoder.forward_single(batch))
+        return batch
+
     def text_process(self, batch):
         device = next(self.clip_transformer.parameters()).device
         raw_text = batch["text"]

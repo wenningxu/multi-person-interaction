@@ -17,8 +17,10 @@ import torch as th
 
 from utils.utils import *
 from utils.plot_script import *
+from utils.paramUtil import *
 
 from models.losses import InterLoss, GeometricLoss
+from models.GLI import TopologyBatch
 
 
 def create_named_schedule_sampler(name, diffusion):
@@ -1370,6 +1372,9 @@ class MotionDiffusion(GaussianDiffusion):
         kwargs["betas"] = np.array(new_betas)
 
         self.normalizer = MotionNormalizerTorch()
+        self.topology_loss = TopologyBatch(t2m_kinematic_chain, 22)
+        self.t_bar = 700
+        self.t_bar_gli = 100
 
         super().__init__(**kwargs)
 
@@ -1377,6 +1382,511 @@ class MotionDiffusion(GaussianDiffusion):
             self, model, *args, **kwargs
     ):  # pylint: disable=signature-differs
         return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
+
+    def p_sample_with_grad(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        sampling_info = None
+    ):
+        """
+        Sample x_{t-1} from the model at the given timestep.
+
+        :param model: the model to sample from.
+        :param x: the current tensor at x_{t-1}.
+        :param t: the value of t, starting at 0 for the first diffusion step.
+        :param clip_denoised: if True, clip the x_start prediction to [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample.
+        :param cond_fn: if not None, this is a gradient function that acts
+                        similarly to the model.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :return: a dict containing the following keys:
+                 - 'sample': a random sample from the model.
+                 - 'pred_xstart': a prediction of x_0.
+        """
+        with th.enable_grad():
+            x = x.detach().requires_grad_()
+            out = self.p_mean_variance(
+                model,
+                x,
+                t,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                model_kwargs=model_kwargs,
+            )
+            pred_x_start = out["pred_xstart"]
+
+            noise = th.randn_like(x)
+            nonzero_mask = (
+                (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+            )  # no noise when t == 0
+            if cond_fn is not None:
+                out["mean"] = self.condition_score_with_grad(
+                    cond_fn, out, x, t, model_kwargs=model_kwargs
+                )
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+
+        sampling_info['t'] = t
+        if (t <= self.t_bar and sampling_info['unrelated']) or t<= self.t_bar_gli:
+            loss, gradient = self.gradients(pred_x_start, x, sampling_info)
+            sample = sample - gradient
+
+        return {"sample": sample, "pred_xstart": out["pred_xstart"].detach()}
+
+    def ddim_sample_control_loop(
+            self,
+            model,
+            shape,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
+            eta=0.0,
+            skip_timesteps=0,
+            init_image=None,
+            randomize_class=False,
+            cond_fn_with_grad=False,
+            dump_steps=None,
+            const_noise=False,
+            x_start=None
+    ):
+        """
+        Generate samples from the model using DDIM.
+
+        Same usage as p_sample_loop().
+        """
+        if dump_steps is not None:
+            raise NotImplementedError()
+        if const_noise == True:
+            raise NotImplementedError()
+
+        # final = []
+        for i, sample in enumerate(self.ddim_sample_control_loop_progressive(
+                model,
+                shape,
+                noise=noise,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                cond_fn=cond_fn,
+                model_kwargs=model_kwargs,
+                device=device,
+                progress=progress,
+                eta=eta,
+                skip_timesteps=skip_timesteps,
+                init_image=init_image,
+                randomize_class=randomize_class,
+                cond_fn_with_grad=cond_fn_with_grad,
+                x_start=x_start
+        )):
+            pass
+            # final.append(sample["pred_xstart"])
+            # return torch.cat(final, dim=0)
+        return sample["pred_xstart"]
+
+    def ddim_sample_control_loop_progressive(
+            self,
+            model,
+            shape,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
+            eta=0.0,
+            skip_timesteps=0,
+            init_image=None,
+            randomize_class=False,
+            cond_fn_with_grad=False,
+            x_start=None
+    ):
+        """
+        Use DDIM to sample from the model and yield intermediate samples from
+        each timestep of DDIM.
+
+        Same usage as p_sample_loop_progressive().
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            img = noise
+        else:
+            img = th.randn(*shape, device=device)
+
+        if skip_timesteps and init_image is None:
+            init_image = th.zeros_like(img)
+
+        indices = list(range(self.num_timesteps - skip_timesteps))[::-1]
+
+        if init_image is not None:
+            my_t = th.ones([shape[0]], device=device, dtype=th.long) * indices[0]
+            img = self.q_sample(init_image, my_t, img)
+
+        if progress:
+            # Lazy import so that we don't depend on tqdm.
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
+
+        for i in indices:
+            t = th.tensor([i] * shape[0], device=device)
+            if randomize_class and 'y' in model_kwargs:
+                model_kwargs['y'] = th.randint(low=0, high=model.num_classes,
+                                               size=model_kwargs['y'].shape,
+                                               device=model_kwargs['y'].device)
+            if x_start is not None:
+                B, T, D = img.shape
+                img[:, :, [0, 2]] = x_start[:, :T, [0, 2]]
+                img[:, :, [262, 264]] = x_start[:, :T, [262, 264]]
+            with th.no_grad():
+                sample_fn = self.ddim_sample_control
+                out = sample_fn(
+                    model,
+                    img,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                    eta=eta,
+                )
+                yield out
+                img = out["sample"]
+
+    def ddim_sample_control(
+            self,
+            model,
+            x,
+            t,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            eta=0.0,
+    ):
+        """
+        Sample x_{t-1} from the model using DDIM.
+
+        Same usage as p_sample().
+        """
+        with th.enable_grad():
+            x = x.detach().requires_grad_()
+            out_orig = self.p_mean_variance(
+                model,
+                x,
+                t,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                model_kwargs=model_kwargs,
+            )
+            if cond_fn is not None:
+                out = self.condition_score_with_grad(cond_fn, out_orig, x, t,
+                                                     model_kwargs=model_kwargs)
+            else:
+                out = out_orig
+
+        pred_x_start = out["pred_xstart"]
+        out["pred_xstart"] = out["pred_xstart"].detach()
+
+        # Usually our model outputs epsilon, but we re-derive it
+        # in case we used x_start or x_prev prediction.
+        eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+
+        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
+        sigma = (
+                eta
+                * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
+                * th.sqrt(1 - alpha_bar / alpha_bar_prev)
+        )
+        # Equation 12.
+        noise = th.randn_like(x)
+        mean_pred = (
+                out["pred_xstart"] * th.sqrt(alpha_bar_prev)
+                + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
+        )
+        nonzero_mask = (
+            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+        )  # no noise when t == 0
+        sample = mean_pred + nonzero_mask * sigma * noise
+
+        loss, gradient = self.gradients_ddim(pred_x_start, x)
+        sample = sample - gradient
+
+        return {"sample": sample, "pred_xstart": out_orig["pred_xstart"].detach()}
+
+
+    def p_sample_loop_multi(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        skip_timesteps=0,
+        init_image=None,
+        randomize_class=False,
+        cond_fn_with_grad=False,
+        dump_steps=None,
+        const_noise=False,
+        inter_graph = None,
+
+    ):
+        """
+        Generate samples from the model.
+
+        :param model: the model module.
+        :param shape: the shape of the samples, (N, C, H, W).
+        :param noise: if specified, the noise from the encoder to sample.
+                      Should be of the same shape as `shape`.
+        :param clip_denoised: if True, clip x_start predictions to [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample.
+        :param cond_fn: if not None, this is a gradient function that acts
+                        similarly to the model.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param device: if specified, the device to create the samples on.
+                       If not specified, use a model parameter's device.
+        :param progress: if True, show a tqdm progress bar.
+        :param const_noise: If True, will noise all samples with the same noise throughout sampling
+        :return: a non-differentiable batch of samples.
+        """
+        final = None
+        denoise = []
+        if dump_steps is not None:
+            dump = []
+
+        for i, sample in enumerate(self.p_sample_loop_progressive_multi(
+            model,
+            shape,
+            noise=noise,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            cond_fn=cond_fn,
+            model_kwargs=model_kwargs,
+            device=device,
+            progress=progress,
+            skip_timesteps=skip_timesteps,
+            init_image=init_image,
+            randomize_class=randomize_class,
+            cond_fn_with_grad=cond_fn_with_grad,
+            const_noise=const_noise,
+            inter_graph = inter_graph,
+        )):
+            final = sample
+        return final
+
+    def p_sample_loop_progressive_multi(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        skip_timesteps=0,
+        init_image=None,
+        randomize_class=False,
+        cond_fn_with_grad=False,
+        const_noise=False,
+        inter_graph=None,
+    ):
+        """
+        Generate samples from the model and yield intermediate samples from
+        each timestep of diffusion.
+
+        Arguments are the same as p_sample_loop().
+        Returns a generator over dicts, where each dict is the return value of
+        p_sample().
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            img = noise
+        else:
+            img = th.randn(*shape, device=device)
+
+        # original_cond = model_kwargs.get('cond', None)
+        n_person = len(inter_graph['in'])
+        sampling_info = {}
+        imgs = [th.randn(*shape, device=device) for i in range(n_person)]
+        starts = [th.randn(*shape, device=device) for i in range(n_person)]
+        if skip_timesteps and init_image is None:
+            init_image = th.zeros_like(img)
+
+        indices = list(range(self.num_timesteps - skip_timesteps))[::-1]
+
+        if init_image is not None:
+            my_t = th.ones([shape[0]], device=device, dtype=th.long) * indices[0]
+            img = self.q_sample(init_image, my_t, img)
+
+        if progress:
+            # Lazy import so that we don't depend on tqdm.
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
+
+        for i in indices:
+            t = th.tensor([i] * shape[0], device=device)
+            if randomize_class and 'y' in model_kwargs:
+                model_kwargs['cond'] = th.randint(low=0, high=model.num_classes,
+                                               size=model_kwargs['cond'].shape,
+                                               device=model_kwargs['cond'].device)
+
+            for j in range(n_person):
+                with th.no_grad():
+                    sample_average = []
+                    for cond_index in inter_graph['in'][j]:
+                        unrelated_index = self.unrelated_nodes(j, inter_graph)
+                        out_unrelated_index = []
+                        if inter_graph['out'][j] and (inter_graph['out'][j] != inter_graph['in'][j]):
+                            out_unrelated_index = inter_graph['out'][j]
+
+                        model_kwargs['b'] = imgs[cond_index]
+                        sampling_info['unrelated'] = []
+                        sampling_info['out_unrelated'] = []
+                        sampling_info['cond'] = starts[cond_index]
+                        for unrelated in unrelated_index:
+                            sampling_info['unrelated'].append(starts[unrelated])
+                        for out_unrelated in out_unrelated_index:
+                            sampling_info['out_unrelated'].append(starts[out_unrelated])
+                        sample_fn = self.p_sample_with_grad
+
+                        out = sample_fn(
+                            model,
+                            imgs[j],
+                            t,
+                            clip_denoised=clip_denoised,
+                            denoised_fn=denoised_fn,
+                            cond_fn=cond_fn,
+                            model_kwargs=model_kwargs,
+                            sampling_info=sampling_info,
+                        )
+                        img = out["sample"]
+                        sample_average.append(img)
+
+                    sample_average = torch.stack(sample_average, dim=0)
+                    sample_average = torch.mean(sample_average, dim=0)
+
+                    imgs[j] = sample_average
+                    starts[j] = out["pred_xstart"]
+
+                yield imgs
+
+            yield imgs
+
+
+    def unrelated_nodes(self, x, inter_graph):
+        outgoing = inter_graph['out']
+        incoming = inter_graph['in']
+        total_nodes = len(incoming)
+        all_nodes = set(range(total_nodes))
+        related = set(outgoing[x]) | set(incoming[x]) | {x}
+        return list(all_nodes - related)
+
+    def gradients(self, x_start, x, sampling_info):
+        with th.enable_grad():
+            losses = 0
+            x_start = self.normalizer.backward(x_start, global_rt=True)
+            B, T = x_start.shape[:2]
+            for y_start in sampling_info['unrelated']:
+                y_start = self.normalizer.backward(y_start, global_rt=True)
+
+                pred_g_joints1 = x_start[..., :22 * 3].reshape(B, T, 22, 3)
+                pred_g_joints2 = y_start[..., :22 * 3].reshape(B, T, 22, 3)
+
+                root_pos1 = pred_g_joints1[..., 0, :]
+                root_pos2 = pred_g_joints2[..., 0, :]
+
+                distances_squared = torch.norm((root_pos1 - root_pos2), dim=-1)
+
+                loss = torch.maximum(torch.zeros_like(distances_squared), 0.8 - distances_squared)
+                losses += loss.sum()
+
+            if sampling_info['t'] % 50 == 0:
+                print('unrelated_loss: ', losses)
+
+            if sampling_info['t'] <= 100:
+                b_start = sampling_info['cond']
+                b_start = self.normalizer.backward(b_start, global_rt=True)
+                motion1 = x_start[..., :22 * 3].reshape(B, T, 22, 3)
+                motion2 = b_start[..., :22 * 3].reshape(B, T, 22, 3)
+
+                GLI = self.topology_loss(motion1.cpu(), motion2.cpu()).to(x.device)
+                mask = (GLI >= 0.4)
+                GLI = GLI * mask
+                losses += 0.6 * GLI.sum()
+
+                for out_start in sampling_info['out_unrelated']:
+                    out_start = self.normalizer.backward(out_start, global_rt=True)
+                    out_start = out_start[..., :22 * 3].reshape(B, T, 22, 3)
+                    GLI_out = self.topology_loss(motion1.cpu(), out_start.cpu()).to(x.device)
+                    mask_out = (GLI_out >= 0.4)
+                    GLI_out = GLI_out * mask_out
+                    losses += 0.6 * GLI_out.sum()
+
+                if sampling_info['t'] % 50 == 0:
+                    print('GLI: ', 0.6 * GLI.sum())
+
+                x_start.detach()
+                x.detach()
+
+            if losses.item() == 0:
+                return 0, 0
+
+            gradient = torch.autograd.grad(losses, inputs=x, create_graph=False)[0]
+            x_start.detach()
+            x.detach()
+        return losses.to(x.device), gradient.to(x.device)
+
+
+    def gradients_ddim(self, x_start, x):
+        with th.enable_grad():
+            losses = 0
+            B, T = x_start.shape[:2]
+            x_start = x_start.reshape(B, T, 2, -1)
+            x_start = self.normalizer.backward(x_start, global_rt=True)
+
+            pred_g_joints = x_start[...,: 22 * 3].reshape(B, T, -1, 22, 3)
+            motion1 = pred_g_joints[:, :, 0]
+            motion2 = pred_g_joints[:, :, 1]
+
+            GLI = self.topology_loss(motion1.cpu(), motion2.cpu()).to(x.device)
+            mask = (GLI >= 0.4)
+            GLI = GLI * mask
+            losses += 0.6*GLI.sum()
+            x_start.detach()
+            x.detach()
+
+            if losses.item() == 0:
+                return 0, 0
+
+            gradient = torch.autograd.grad(losses, inputs=x, create_graph=False)[0]
+            x_start.detach()
+            x.detach()
+        return losses.to(x.device), gradient.to(x.device)
+
 
     def training_losses(self, model, mask, t_bar, cond_mask, *args, **kwargs):
         target = kwargs["x_start"]
