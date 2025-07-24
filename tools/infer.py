@@ -161,7 +161,7 @@ if __name__ == '__main__':
     inter_graph_out = infer_cfg.INTER_GRAPH.OUT
     inter_graph = {'in': inter_graph_in, 'out': inter_graph_out}
 
-    with open(".\prompts.txt") as f:
+    with open("./prompts.txt") as f:
         texts = f.readlines()
     texts = [text.strip("\n") for text in texts]
 
