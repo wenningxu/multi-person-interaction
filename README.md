@@ -1,7 +1,7 @@
 <div align="center">
 <h1 align="center">Multi-Person Interaction Generation from Two-Person Motion Priors</h1>
-
-  <a href='https://aigc-explorer.github.io/TIMotion-page/'><img src='https://img.shields.io/badge/Protect_Page-website-blue'></a> <a href='https://arxiv.org/abs/2408.17135'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a> 
+<h3 align="center">SIGGRAPH 2025 Conference Proceedings</h3>
+  <a href='https://wenningxu.github.io/multicharacter/'><img src='https://img.shields.io/badge/Protect_Page-website-blue'></a> <a href='https://arxiv.org/abs/2505.17860'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
 </div>
 <p align="center">
   <img src="./readme/teaser-gap.jpg" width="900" />
