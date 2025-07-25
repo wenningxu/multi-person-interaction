@@ -1718,6 +1718,9 @@ class MotionDiffusion(GaussianDiffusion):
         Arguments are the same as p_sample_loop().
         Returns a generator over dicts, where each dict is the return value of
         p_sample().
+
+        In one timestep, we sample each character separately, and do sampling guidance in p_sample_with_grad().
+        Different texts can be assigned to different characters.
         """
         if device is None:
             device = next(model.parameters()).device
@@ -1727,11 +1730,13 @@ class MotionDiffusion(GaussianDiffusion):
         else:
             img = th.randn(*shape, device=device)
 
-        # original_cond = model_kwargs.get('cond', None)
-        n_person = len(inter_graph['in'])
-        sampling_info = {}
+        n_person = len(inter_graph['in'])  # Number of individuals (e.g., characters) to sample
+
+        sampling_info = {}  # Dictionary to hold additional sampling context/info
+
         imgs = [th.randn(*shape, device=device) for i in range(n_person)]
-        starts = [th.randn(*shape, device=device) for i in range(n_person)]
+        starts = [th.randn(*shape, device=device) for i in range(n_person)]  # Store predicted x_start for each person
+
         if skip_timesteps and init_image is None:
             init_image = th.zeros_like(img)
 
@@ -1747,6 +1752,7 @@ class MotionDiffusion(GaussianDiffusion):
 
             indices = tqdm(indices)
 
+        # original_cond = model_kwargs.get('cond', None)
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             if randomize_class and 'y' in model_kwargs:
@@ -1756,21 +1762,28 @@ class MotionDiffusion(GaussianDiffusion):
 
             for j in range(n_person):
                 with th.no_grad():
+                    # If a character (e.g. Ch.1) conditions on more than one other character, denoising of each condition pair is performed individually and averaged in each timestep
+                    # Each time we just sample one character
                     sample_average = []
-                    for cond_index in inter_graph['in'][j]:
-                        unrelated_index = self.unrelated_nodes(j, inter_graph)
-                        out_unrelated_index = []
-                        if inter_graph['out'][j] and (inter_graph['out'][j] != inter_graph['in'][j]):
-                            out_unrelated_index = inter_graph['out'][j]
 
-                        model_kwargs['b'] = imgs[cond_index]
+                    for cond_index in inter_graph['in'][j]:  # Loop through condition characters
+                        unrelated_index = self.unrelated_nodes(j, inter_graph)  # Get unrelated nodes in pairwise interaction graph
+                        out_unrelated_index = []
+
+                        if inter_graph['out'][j] and (inter_graph['out'][j] != inter_graph['in'][j]):
+                            out_unrelated_index = inter_graph['out'][j]  # Get out-unrelated nodes
+
+                        model_kwargs['b'] = imgs[cond_index] # Condition from last time step
                         sampling_info['unrelated'] = []
                         sampling_info['out_unrelated'] = []
                         sampling_info['cond'] = starts[cond_index]
+
                         for unrelated in unrelated_index:
                             sampling_info['unrelated'].append(starts[unrelated])
+
                         for out_unrelated in out_unrelated_index:
                             sampling_info['out_unrelated'].append(starts[out_unrelated])
+
                         sample_fn = self.p_sample_with_grad
 
                         out = sample_fn(
@@ -1789,12 +1802,13 @@ class MotionDiffusion(GaussianDiffusion):
                     sample_average = torch.stack(sample_average, dim=0)
                     sample_average = torch.mean(sample_average, dim=0)
 
-                    imgs[j] = sample_average
-                    starts[j] = out["pred_xstart"]
+                    imgs[j] = sample_average  # Update motion for character j
+                    starts[j] = out["pred_xstart"]  # Store predicted x_start for next round
 
                 yield imgs
 
             yield imgs
+
 
 
     def unrelated_nodes(self, x, inter_graph):

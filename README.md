@@ -1,4 +1,11 @@
-# Multi-Person Interaction Generation from Two-Person Motion Priors
+<div align="center">
+<h1 align="center">Multi-Person Interaction Generation from Two-Person Motion Priors</h1>
+
+  <a href='https://aigc-explorer.github.io/TIMotion-page/'><img src='https://img.shields.io/badge/Protect_Page-website-blue'></a> <a href='https://arxiv.org/abs/2408.17135'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a> 
+</div>
+<p align="center">
+  <img src="./readme/teaser-gap.jpg" width="900" />
+</p>
 
 ## Getting started
 
@@ -23,38 +30,50 @@ Download the data from [webpage](https://tr3e.github.io/intergen-page/). And put
 
 
 
-### 1. Download the checkpoint
+### 3. Download the checkpoint
 Run the shell script:
 
 ```shell
 ./prepare/download_pretrain_model.sh
 ```
+## Generate Multi-person Interactions
 
-### 2. Modify the configs
-Modify config files ./configs/model.yaml and ./configs/infer.yaml
+### 1. Modify the configs and pair-wise interaction graph
+Modify config files ./configs/model.yaml and graph structure you want in ./configs/infer.yaml. 
+For example, you can change the `INTER_GRAPH` field in `infer.yaml` to:
 
+```yamlgraph:
+INTER_GRAPH:
+  IN: [[1, 2], [0], [0]]
+  OUT: [[1, 2], [0], [0]]
+```
+Which is a 2 vs 1 scene, where character 0 interacts with character 1 and 2.
 
-### 3. Modify the input file ./prompts.txt like:
+### 2. Modify the input file ./prompts.txt like:
 
 ```sh
-In an intense boxing match, one is continuously punching while the other is defending and counterattacking.
-With fiery passion two dancers entwine in Latin dance sublime.
-Two fencers engage in a thrilling duel, their sabres clashing and sparking as they strive for victory.
-The two are blaming each other and having an intense argument.
-Two good friends jump in the same rhythm to celebrate.
-Two people bow to each other.
-Two people embrace each other.
+People attack each other with their punch.
+They initiate a dance routine that involves swaying shoulders and arms.
+People are blaming each other and having an intense argument.
+They engage in a fierce boxing match, with aggressively exchanging blows while also defending themselves.
+People are playing a game of tossing and catching a toy duck.
 ...
 ```
 
-### 4. Run
+### 3. Run
 ```shell
-python tools/infer.py
+python tools/infer_multi.py
 ```
-The results will be ploted and put in ./results/
+The results will be plotted and put in ./results/
 
 
+## Extend to other two-person diffusion model
+Please read the paper and [sample function](https://github.com/wenningxu/multi-person-interaction/blob/master/models/gaussian_diffusion.py#L1696).
 
+## TODOs
+- [ ] Release the time-varying sampling process.
+
+- [X] Release the multi-person sampling code.
 
 ## Citation
 
@@ -79,5 +98,5 @@ If you find our work useful in your research, please consider citing:
 
 
 
-## Acknowledgement
-This code is derived from InterGen
+## Acknowledgments
+This code is derived from [InterGen](https://tr3e.github.io/intergen-page/).
