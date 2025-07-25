@@ -51,7 +51,7 @@ Which is a 2 vs 1 scene, where character 0 interacts with character 1 and 2.
 
 ### 2. Modify the input file ./prompts.txt like:
 
-```sh
+```text
 People attack each other with their punch.
 They initiate a dance routine that involves swaying shoulders and arms.
 People are blaming each other and having an intense argument.
