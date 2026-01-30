@@ -70,10 +70,6 @@ The results will be plotted and put in ./results/
 ## Extend to other two-person diffusion model
 Please read the paper and [sample function](https://github.com/wenningxu/multi-person-interaction/blob/master/models/gaussian_diffusion.py#L1696).
 
-## TODOs
-- [ ] Release the time-varying sampling process.
-
-- [X] Release the multi-person sampling code.
 
 ## Citation
 
