@@ -1,62 +1,11 @@
-# InterGen: Diffusion-based Multi-human Motion Generation under Complex Interactions
-### [ProjectPage](https://tr3e.github.io/intergen-page/) | [Paper](https://doi.org/10.1007/s11263-024-02042-6)  | [Arxiv](https://arxiv.org/abs/2304.05684)  |  [InterHuman Dataset](https://drive.google.com/drive/folders/1oyozJ4E7Sqgsr7Q747Na35tWo5CjNYk3?usp=sharing)
-[Han Liang](https://tr3e.github.io/), Wenqian Zhang, Wenxuan Li, [Jingyi Yu](http://www.yu-jingyi.com/), [Lan Xu](http://www.xu-lan.com/).</br>
-
-
-
-This repository contains the official implementation for the paper: [InterGen: Diffusion-based Multi-human Motion Generation
-under Complex Interactions (IJCV 2024)](https://doi.org/10.1007/s11263-024-02042-6). 
-
-Our work is capable of simultaneously generating high-quality interactive motions of two people with only text guidance, enabling various downstream tasks including person-to-person generation, inbetweening, trajectory control and so forth. 
-
-For more qualitative results, please visit our [webpage](https://tr3e.github.io/intergen-page/).
-
-<p float="left">
-  <img src="./readme/pipeline.png" width="900" />
+<div align="center">
+<h1 align="center">Multi-Person Interaction Generation from Two-Person Motion Priors</h1>
+<h3 align="center">SIGGRAPH 2025 Conference Proceedings</h3>
+  <a href='https://wenningxu.github.io/multicharacter/'><img src='https://img.shields.io/badge/Protect_Page-website-blue'></a> <a href='https://arxiv.org/abs/2505.17860'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
+</div>
+<p align="center">
+  <img src="./readme/teaser-gap.jpg" width="900" />
 </p>
-
-
-<!-- ![trajectorycontrol](https://github.com/tr3e/InterGen/blob/main/trajectorycontrol.gif) -->
-
-<!-- ### Person-to-person generation
-
-<p float="left">
-  <img src="./readme/a2b.gif" width="900" />
-</p>
-
-<!-- #### Person-to-person generation
-![person-to-person](https://github.com/tr3e/InterGen/blob/main/a2b.gif) -->
-<!--
-### Inbetweening
-
-<p float="left">
-  <img src="./readme/inbetweening.gif" width="900" />
-</p> -->
-
-<!-- #### Inbetweening
-![inbetweening](https://github.com/tr3e/InterGen/blob/main/inbetweening.gif) -->
-
-
-<!-- ## Abstract
-We have recently seen tremendous progress in diffusion advances for generating realistic human motions. Yet, they largely disregard the rich multi-human interactions.
-
-In this paper, we present InterGen, an effective diffusion-based approach that incorporates human-to-human interactions into the motion diffusion process, which enables layman users to customize high-quality two-person interaction motions, with only text guidance.
-
-We first contribute a multimodal dataset, named InterHuman. It consists of about 107M frames for diverse two-person interactions, with accurate skeletal motions and 23,337 natural language descriptions. For the algorithm side, we carefully tailor the motion diffusion model to our two-person interaction setting. Then, we propose a novel representation for motion input in our interaction diffusion model, which explicitly formulates the global relations between the two performers in the world frame. We further introduce two novel regularization terms to encode spatial relations, equipped with a corresponding damping scheme during the training of our interaction diffusion model. -->
-
-
-## InterHuman Dataset
-<!-- ![interhuman](https://github.com/tr3e/InterGen/blob/main/interhuman.gif) -->
-
-InterHuman is a comprehensive, large-scale 3D human interactive motion dataset encompassing a diverse range of 3D motions of two interactive people, each accompanied by natural language annotations.
-
-<p float="left">
-  <img src="./readme/interhuman.gif" width="900" />
-</p>
-
-It is made available under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode) license. You can access the dataset in our [webpage](https://tr3e.github.io/intergen-page/) with the google drive link for **non-commercial purposes**, as long as you give appropriate credit by **citing our paper** and **indicating any changes** that you've made. The redistribution of the dataset is **prohibited**. 
-
-
 
 ## Getting started
 
@@ -79,79 +28,47 @@ pip install -r requirements.txt
 
 Download the data from [webpage](https://tr3e.github.io/intergen-page/). And put them into ./data/.
 
-#### Data Structure
-```sh
-<DATA-DIR>
-./annots                //Natural language annotations where each file consisting of three sentences.
-./motions               //Raw motion data standardized as SMPL which is similiar to AMASS.
-./motions_processed     //Processed motion data with joint positions and rotations (6D representation) of SMPL 22 joints kinematic structure.
-./split                 //Train-val-test split.
-```
 
 
-## Demo
-
-
-
-### 1. Download the checkpoint
+### 3. Download the checkpoint
 Run the shell script:
 
 ```shell
 ./prepare/download_pretrain_model.sh
 ```
+## Generate Multi-person Interactions
 
-### 2. Modify the configs
-Modify config files ./configs/model.yaml and ./configs/infer.yaml
+### 1. Modify the configs and pair-wise interaction graph
+Modify config files ./configs/model.yaml and graph structure you want in ./configs/infer.yaml. 
+For example, you can change the `INTER_GRAPH` field in `infer.yaml` to:
 
+```yamlgraph:
+INTER_GRAPH:
+  IN: [[1, 2], [0], [0]]
+  OUT: [[1, 2], [0], [0]]
+```
+Which is a 2 vs 1 scene, where character 0 interacts with character 1 and 2.
 
-### 3. Modify the input file ./prompts.txt like:
+### 2. Modify the input file ./prompts.txt like:
 
-```sh
-In an intense boxing match, one is continuously punching while the other is defending and counterattacking.
-With fiery passion two dancers entwine in Latin dance sublime.
-Two fencers engage in a thrilling duel, their sabres clashing and sparking as they strive for victory.
-The two are blaming each other and having an intense argument.
-Two good friends jump in the same rhythm to celebrate.
-Two people bow to each other.
-Two people embrace each other.
+```text
+People attack each other with their punch.
+They initiate a dance routine that involves swaying shoulders and arms.
+People are blaming each other and having an intense argument.
+They engage in a fierce boxing match, with aggressively exchanging blows while also defending themselves.
+People are playing a game of tossing and catching a toy duck.
 ...
 ```
 
-### 4. Run
+### 3. Run
 ```shell
-python tools/infer.py
+python tools/infer_multi.py
 ```
-The results will be rendered and put in ./results/
+The results will be plotted and put in ./results/
 
 
-## Train
-
-
-Modify config files ./configs/model.yaml ./configs/datasets.yaml and ./configs/train.yaml, and then run:
-
-```shell
-python tools/train.py
-```
-
-
-## Evaluation
-
-
-
-### 1. Modify the configs
-Modify config files ./configs/model.yaml and ./configs/datasets.yaml
-
-### 2. Run
-```shell
-python tools/eval.py
-```
-
-
-## Application
-<p float="left">
-  <img src="./readme/trajectorycontrol.gif" width="900" />
-</p>
-
+## Extend to other two-person diffusion model
+Please read the paper and [sample function](https://github.com/wenningxu/multi-person-interaction/blob/master/models/gaussian_diffusion.py#L1696).
 
 
 ## Citation
@@ -159,20 +76,23 @@ python tools/eval.py
 If you find our work useful in your research, please consider citing:
 
 ```
-@article{liang2024intergen,
-  title={Intergen: Diffusion-based multi-human motion generation under complex interactions},
-  author={Liang, Han and Zhang, Wenqian and Li, Wenxuan and Yu, Jingyi and Xu, Lan},
-  journal={International Journal of Computer Vision},
-  pages={1--21},
-  year={2024},
-  publisher={Springer}
+@inproceedings{Xu2025,
+  series = {SIGGRAPH Conference Papers ’25},
+  title = {Multi-Person Interaction Generation from Two-Person Motion Priors},
+  url = {http://dx.doi.org/10.1145/3721238.3730688},
+  DOI = {10.1145/3721238.3730688},
+  booktitle = {Proceedings of the Special Interest Group on Computer Graphics and Interactive Techniques Conference Conference Papers},
+  publisher = {ACM},
+  author = {Xu,  Wenning and Fan,  Shiyu and Henderson,  Paul and Ho,  Edmond S. L.},
+  year = {2025},
+  month = aug,
+  pages = {1–11},
+  collection = {SIGGRAPH Conference Papers ’25}
 }
 ```
 
 
 
 
-## Licenses
-<a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/80x15.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License</a>.
-
-All material is made available under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode) license. You can **use and adapt** the material for **non-commercial purposes**, as long as you give appropriate credit by **citing our paper** and **indicating any changes** that you've made.
+## Acknowledgments
+This code is derived from [InterGen](https://tr3e.github.io/intergen-page/).
